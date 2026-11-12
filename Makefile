@@ -2,11 +2,14 @@ CC = gcc
 CFLAGS = -Wall -Wextra -pthread
 LDFLAGS = -lsqlite3
 
-server: server.c
-	$(CC) $(CFLAGS) -fsanitize=address,undefined server.c $(LDFLAGS) -o server
+SRCS = server.c http.c
+HDRS = http.h types.h
 
-server_tsan: server.c 
-	$(CC) $(CFLAGS) -fsanitize=thread server.c $(LDFLAGS) -o server_tsan
+server: $(SRCS) $(HDRS)
+	$(CC) $(CFLAGS) -fsanitize=address,undefined $(SRCS) $(LDFLAGS) -o server
+
+server_tsan: $(SRCS) $(HDRS)
+	$(CC) $(CFLAGS) -fsanitize=thread $(SRCS) $(LDFLAGS) -o server_tsan
 
 clean: 
 	rm -f server server_tsan

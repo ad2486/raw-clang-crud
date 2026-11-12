@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "types.h"
+#include "http.h"
 
 #define PORT 8080
 
@@ -41,7 +42,11 @@ i32 main(void) {
         perror("Erro no setsockopt");
         exit(EXIT_FAILURE);
     }
-    bind_socket(server_fd, (struct sockaddr *) &server_address, sizeof(server_address));
+    bind_socket(
+        server_fd, 
+        (struct sockaddr *) &server_address, 
+        sizeof(server_address)
+    );
     listen_socket(server_fd, SOMAXCONN);
 
     printf("Listening to connections on port %d\n", ntohs(server_address.sin_port));
@@ -49,15 +54,17 @@ i32 main(void) {
         ClientSocket client = accept_client(server_fd);
         printf("Client connected in file descriptor %d\n", client.fd);
 
-        const char *http_response =
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: text/plain; charset=utf-8\r\n"
-            "Content-Length: 13\r\n"
-            "Connection: close\r\n"
-            "\r\n"
-            "Hello, World!";
+        HttpRequest req;
+        if (read_http_request(client.fd, &req) < 0) {
+            send_http_response(client.fd, 400, "Bad Request", "text/plain", "Bad Request\n");
+        } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/") == 0) {
+            send_http_response(client.fd, 200, "OK", "text/plain", "Hello World!\n");
+        } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/echo") == 0) {
+            send_http_response(client.fd, 200, "OK", "text/plain", req.body);
+        } else {
+            send_http_response(client.fd, 404, "Not Found", "text/plain", "404 Not Found");
+        }
 
-        send_response(client.fd, http_response, strlen(http_response));
         close_socket(client.fd);
     }
 
@@ -76,7 +83,11 @@ i32 create_socket(void) {
 }
 
 
-void bind_socket(i32 server_file_descriptor, const struct sockaddr *socket_address, socklen_t address_length) {
+void bind_socket(
+    i32 server_file_descriptor, 
+    const struct sockaddr *socket_address, 
+    socklen_t address_length
+) {
     if (bind(server_file_descriptor, socket_address, address_length) < 0) {
         perror("Error while binding");
         exit(EXIT_FAILURE);
@@ -99,7 +110,11 @@ void close_socket(i32 file_descriptor) {
     }
 }
 
-i32 send_response(i32 client_file_descriptor, const void *buffer, size_t total_bytes) {
+i32 send_response(
+    i32 client_file_descriptor, 
+    const void *buffer, 
+    size_t total_bytes
+) {
     const u8 *ptr = (const u8 *)buffer;
     size_t bytes_remaining = total_bytes;
 
