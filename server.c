@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #include "types.h"
 #include "http.h"
@@ -26,6 +27,7 @@ void listen_socket(i32 server_file_descriptor, i32 backlog);
 void close_socket(i32 file_descriptor); 
 i32 send_response(i32 client_file_descriptor, const void *buffer, size_t total_bytes);
 ClientSocket accept_client(i32 server_file_descriptor);
+void *handle_client(void *arg);
 
 
 i32 main(void) {
@@ -50,25 +52,25 @@ i32 main(void) {
     listen_socket(server_fd, SOMAXCONN);
 
     printf("Listening to connections on port %d\n", ntohs(server_address.sin_port));
-    while (1) {    
+    while (1) {
         ClientSocket client = accept_client(server_fd);
-        printf("Client connected in file descriptor %d\n", client.fd);
-
-        HttpRequest req;
-        if (read_http_request(client.fd, &req) < 0) {
-            send_http_response(client.fd, 400, "Bad Request", "text/plain", "Bad Request\n");
-        } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/") == 0) {
-            send_http_response(client.fd, 200, "OK", "text/plain", "Hello World!\n");
-        } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/echo") == 0) {
-            send_http_response(client.fd, 200, "OK", "text/plain", req.body);
-        } else {
-            send_http_response(client.fd, 404, "Not Found", "text/plain", "404 Not Found");
+        i32 *client_fd = malloc(sizeof(i32));
+        if (client_fd == NULL) {
+            perror("Error while allocating memory for file descriptor thread");
+            continue;
         }
+        *client_fd = client.fd;
+        pthread_t tid;
 
-        close_socket(client.fd);
+        if (pthread_create(&tid, NULL, handle_client, client_fd) != 0) {
+            perror("Erorr while creating thread for handling request");
+            free(client_fd);
+            close(client.fd);
+            continue;
+        }
+        pthread_detach(tid);
     }
 
-    close_socket(server_fd);
     return 0;
 }
 
@@ -149,3 +151,20 @@ ClientSocket accept_client(i32 server_file_descriptor) {
     return client;
 }
 
+void *handle_client(void *arg) {
+    i32 client_fd = *(i32 *)arg;
+    HttpRequest req;
+    free(arg);
+    printf("Client connected in fd: %d\n", client_fd);
+    if (read_http_request(client_fd, &req) < 0) {
+        send_http_response(client_fd, 400, "Bad Request", "text/plain", "Bad Request\n");
+    } else if (strcmp(req.method, "GET") == 0 && strcmp(req.path, "/") == 0) {
+        send_http_response(client_fd, 200, "OK", "text/plain", "Hello World!\n");
+    } else if (strcmp(req.method, "POST") == 0 && strcmp(req.path, "/echo") == 0) {
+        send_http_response(client_fd, 200, "OK", "text/plain", req.body);
+    } else {
+        send_http_response(client_fd, 404, "Not Found", "text/plain", "404 Not Found");
+    }
+    close_socket(client_fd);
+    return NULL;
+}

@@ -29,7 +29,7 @@ Listens on port `8080`.
 
 - [x] Phase 1: Basic TCP server (`socket`, `bind`, `listen`, `accept`, `SO_REUSEADDR`, `SIGPIPE`)
 - [x] Phase 2: Manual HTTP/1.1 parser (`read_http_request`, `Content-Length`, `build_http_response`, `send_http_response`)
-- [ ] Phase 3: Concurrency with `pthread`
+- [x] Phase 3: Concurrency with `pthread`
 - [ ] Phase 4: SQLite persistence
 - [ ] Phase 5: CRUD routing and JSON
 - [ ] Phase 6: Robustness and cleanup
