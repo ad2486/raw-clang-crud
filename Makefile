@@ -1,9 +1,9 @@
 CC = gcc 
-CFLAGS = -Wall -Wextra -pthread
-LDFLAGS = -lsqlite3
+CFLAGS = -Wall -Wextra -pthread -I/opt/homebrew/include
+LDFLAGS = -L/opt/homebrew/lib -lsqlite3 -lcjson
 
-SRCS = server.c http.c db.c
-HDRS = http.h db.h types.h
+SRCS = server.c http.c db.c json.c
+HDRS = http.h db.h json.h types.h
 
 server: $(SRCS) $(HDRS)
 	$(CC) $(CFLAGS) -fsanitize=address,undefined $(SRCS) $(LDFLAGS) -o server
