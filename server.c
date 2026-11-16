@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include "db.h"
@@ -17,6 +18,13 @@
 #define DB_PATH "users.db"
 
 #define PORT 8080
+#define RECV_TIMEOUT_SEC 5
+#define MAX_THREADS 64
+
+static pthread_mutex_t threads_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t thread_cond = PTHREAD_COND_INITIALIZER;
+static i32 active_threads = 0;
+static volatile sig_atomic_t running = 1;
 
 typedef struct {
   i32 fd;
@@ -34,9 +42,28 @@ i32 send_response(i32 client_file_descriptor, const void *buffer,
                   size_t total_bytes);
 ClientSocket accept_client(i32 server_file_descriptor);
 void *handle_client(void *arg);
+static void send_json_error(i32 client_fd, i32 status, const char *status_text,
+                            const char *msg);
+
+static void release_thread_slot(void) {
+  pthread_mutex_lock(&threads_mutex);
+  active_threads--;
+  pthread_cond_signal(&thread_cond);
+  pthread_mutex_unlock(&threads_mutex);
+}
+
+static void handle_sigint(i32 sig) {
+  (void)sig;
+  running = 0;
+}
 
 i32 main(void) {
   signal(SIGPIPE, SIG_IGN);
+  struct sigaction sa = {0};
+  sa.sa_handler = handle_sigint;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigaction(SIGINT, &sa, NULL);
   i32 option = 1;
   struct sockaddr_in server_address;
   memset(&server_address, 0, sizeof(server_address));
@@ -63,24 +90,52 @@ i32 main(void) {
   db_close(db);
   printf("Listening to connections on port %d\n",
          ntohs(server_address.sin_port));
-  while (1) {
+  while (running) {
     ClientSocket client = accept_client(server_fd);
+    if (client.fd == -1) {
+      if (!running)
+        break;
+      continue;
+    }
+
+    pthread_mutex_lock(&threads_mutex);
+    if (active_threads >= MAX_THREADS) {
+      pthread_mutex_unlock(&threads_mutex);
+      send_json_error(client.fd, 503, "Service Unavailable", "Server busy");
+      close_socket(client.fd);
+      continue;
+    }
+
+    active_threads++;
+    pthread_mutex_unlock(&threads_mutex);
+
     i32 *client_fd = malloc(sizeof(i32));
     if (client_fd == NULL) {
       perror("Error while allocating memory for file descriptor thread");
+      release_thread_slot();
+      close_socket(client.fd);
       continue;
     }
+
     *client_fd = client.fd;
     pthread_t tid;
 
     if (pthread_create(&tid, NULL, handle_client, client_fd) != 0) {
       perror("Erorr while creating thread for handling request");
+      release_thread_slot();
       free(client_fd);
-      close(client.fd);
+      close_socket(client.fd);
       continue;
     }
     pthread_detach(tid);
   }
+
+  close_socket(server_fd);
+  pthread_mutex_lock(&threads_mutex);
+  while (active_threads > 0) {
+    pthread_cond_wait(&thread_cond, &threads_mutex);
+  }
+  pthread_mutex_unlock(&threads_mutex);
 
   return 0;
 }
@@ -149,8 +204,10 @@ ClientSocket accept_client(i32 server_file_descriptor) {
                      &client.address_length);
 
   if (client.fd == -1) {
-    perror("Error while accepting connection");
-    exit(EXIT_FAILURE);
+    if (errno != EINTR) {
+      perror("Error while accepting connection");
+    }
+    return client;
   }
   return client;
 }
@@ -281,28 +338,35 @@ static void route_request(i32 client_fd, sqlite3 *db, const HttpRequest *req) {
   send_json_error(client_fd, 404, "Not Found", "Route not found");
 }
 
-void *handle_client(void *arg) {
-  i32 client_fd = *(i32 *)arg;
-  free(arg);
+static void process_client(i32 client_fd) {
+  struct timeval tv = {.tv_sec = RECV_TIMEOUT_SEC, .tv_usec = 0};
+  if (setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+    perror("setsockopt SO_RCVTIMEO");
+  }
 
   HttpRequest req;
   if (read_http_request(client_fd, &req) < 0) {
     send_json_error(client_fd, 400, "Bad Request", "Malformed HTTP request");
-    close_socket(client_fd);
-    return NULL;
+    return;
   }
 
   sqlite3 *db = NULL;
   if (db_open(DB_PATH, &db) < 0) {
     send_json_error(client_fd, 500, "Internal Server Error",
                     "Database connection failed");
-    close_socket(client_fd);
-    return NULL;
+    return;
   }
 
   route_request(client_fd, db, &req);
-
   db_close(db);
+}
+
+void *handle_client(void *arg) {
+  i32 client_fd = *(i32 *)arg;
+  free(arg);
+
+  process_client(client_fd);
   close_socket(client_fd);
+  release_thread_slot();
   return NULL;
 }
