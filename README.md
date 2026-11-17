@@ -34,3 +34,4 @@ Listens on port `8080`.
 - [x] Phase 4: SQLite persistence
 - [x] Phase 5: CRUD routing and JSON
 - [x] Phase 6: Robustness and cleanup
+- [x] Phase 7: Thread pool (`pool.h` / `pool.c`)
